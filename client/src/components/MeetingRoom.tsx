@@ -15,6 +15,7 @@ interface MeetingRoomProps {
   initialVideo: boolean;
   initialEffect: string;
   onLeave: () => void;
+  isCreator: boolean;
 }
 
 export type LayoutMode = 'tile' | 'spotlight' | 'sidebar';
@@ -27,7 +28,8 @@ export default function MeetingRoom({
   initialMic, 
   initialVideo, 
   initialEffect,
-  onLeave 
+  onLeave,
+  isCreator
 }: MeetingRoomProps) {
   
   const {
@@ -56,7 +58,7 @@ export default function MeetingRoom({
     captionsEnabled,
     toggleCaptions,
     joinHistory
-  } = useWebRTC(roomId, userId, userName, initialStream, initialMic, initialVideo);
+  } = useWebRTC(roomId, userId, userName, initialStream, initialMic, initialVideo, isCreator);
 
   const [activeDrawer, setActiveDrawer] = useState<'chat' | 'participants' | null>(null);
   const [showInfo, setShowInfo] = useState<boolean>(false);
@@ -147,6 +149,8 @@ export default function MeetingRoom({
             localUserName={userName}
             onClose={() => setActiveDrawer(null)} 
             joinHistory={joinHistory}
+            isCreator={isCreator}
+            roomId={roomId}
           />
         )}
       </div>

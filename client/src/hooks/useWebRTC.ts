@@ -45,7 +45,8 @@ export default function useWebRTC(
   initialUserName: string, 
   initialStream: MediaStream | null, 
   initialMic: boolean, 
-  initialVideo: boolean
+  initialVideo: boolean,
+  isCreator: boolean
 ) {
   const [peers, setPeers] = useState<Peer[]>([]);
   const [localStream, setLocalStream] = useState<MediaStream | null>(initialStream);
@@ -282,11 +283,24 @@ export default function useWebRTC(
         addHistoryEntry(`${initialUserName} (You)`, 'joined');
 
         if (!isHostRole) {
-          // If we are a guest, connect to the host
-          const conn = peer!.connect(hostId, {
-            metadata: { userName: initialUserName, userId, micEnabled: initialMic, videoEnabled: initialVideo }
-          });
-          handleDataConnection(conn);
+          // If we are a guest, connect to the host. If host is not online yet, retry periodically!
+          const connectToHost = () => {
+            if (peer && !peer.destroyed && !dataConnectionsRef.current[hostId]) {
+              console.log('Connecting to host:', hostId);
+              const conn = peer.connect(hostId, {
+                metadata: { userName: initialUserName, userId, micEnabled: micEnabledRef.current, videoEnabled: videoEnabledRef.current }
+              });
+              (conn as any).isInitiator = true;
+              handleDataConnection(conn);
+
+              conn.on('error', (err) => {
+                console.log('Host connection error (host offline), retrying in 4s...', err);
+                conn.close();
+                setTimeout(connectToHost, 4000);
+              });
+            }
+          };
+          connectToHost();
         }
       });
 
@@ -527,22 +541,31 @@ export default function useWebRTC(
         delete mediaCallsRef.current[peerId];
       }
 
-      // If the disconnected peer was the host, elect a new host!
+      // If the disconnected peer was the host, wait for host to reconnect
       if (peerId === hostId) {
-        console.log('Host disconnected! Electing a new host...');
-        const delay = Math.random() * 2000 + 1000; // 1-3 seconds random delay
-        setTimeout(() => {
-          if (peerInstanceRef.current && !peerInstanceRef.current.destroyed) {
-            console.log('Attempting to become the new host...');
-            peerInstanceRef.current.destroy();
-            initPeer(true);
+        console.log('Host disconnected! Starting reconnect loop...');
+        const retryConnect = () => {
+          if (peer && !peer.destroyed && !dataConnectionsRef.current[hostId]) {
+            console.log('Retrying connection to host...');
+            const conn = peer.connect(hostId, {
+              metadata: { userName: initialUserName, userId, micEnabled: micEnabledRef.current, videoEnabled: videoEnabledRef.current }
+            });
+            (conn as any).isInitiator = true;
+            handleDataConnection(conn);
+
+            conn.on('error', (e) => {
+              console.log('Host offline, retrying in 5s...', e);
+              conn.close();
+              setTimeout(retryConnect, 5000);
+            });
           }
-        }, delay);
+        };
+        setTimeout(retryConnect, 5000);
       }
     };
 
-    // Try starting as host
-    initPeer(true);
+    // Try starting as host if we are the creator
+    initPeer(isCreator);
 
     return () => {
       peer?.destroy();

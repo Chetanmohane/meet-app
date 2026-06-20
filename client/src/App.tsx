@@ -20,6 +20,7 @@ export default function App() {
   const [roomId, setRoomId] = useState<string>('');
   const [userId] = useState<string>(() => 'user-' + Math.random().toString(36).substring(2, 11));
   const [userName, setUserName] = useState<string>('');
+  const [isCreator, setIsCreator] = useState<boolean>(false);
   
   const [initialStream, setInitialStream] = useState<MediaStream | null>(null);
   const [initialMic, setInitialMic] = useState<boolean>(true);
@@ -33,18 +34,25 @@ export default function App() {
     if (potentialRoomId && potentialRoomId.length >= 3) {
       potentialRoomId = potentialRoomId.split('/')[0];
       setRoomId(potentialRoomId);
+      
+      const queryParams = new URLSearchParams(window.location.search);
+      const isRoomCreator = queryParams.get('creator') === 'true';
+      setIsCreator(isRoomCreator);
+      
       setPage('lobby');
     }
   }, []);
 
   const handleCreateRoom = (newRoomId: string) => {
     setRoomId(newRoomId);
-    window.history.pushState({}, '', `/join/${newRoomId}`);
+    setIsCreator(true);
+    window.history.pushState({}, '', `/join/${newRoomId}?creator=true`);
     setPage('lobby');
   };
 
   const handleJoinRoom = (targetRoomId: string) => {
     setRoomId(targetRoomId);
+    setIsCreator(false);
     window.history.pushState({}, '', `/join/${targetRoomId}`);
     setPage('lobby');
   };
@@ -118,6 +126,7 @@ export default function App() {
           initialVideo={initialVideo} 
           initialEffect={initialEffect}
           onLeave={handleLeaveRoom}
+          isCreator={isCreator}
         />
       )}
     </>

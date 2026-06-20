@@ -26,6 +26,15 @@ export default function Lobby({ roomId, user, onJoin }: LobbyProps) {
   const [permissionError, setPermissionError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
+  // Email verification states
+  const [email, setEmail] = useState<string>('');
+  const [otp, setOtp] = useState<string>('');
+  const [generatedOtp, setGeneratedOtp] = useState<string>('');
+  const [otpSent, setOtpSent] = useState<boolean>(false);
+  const [isVerified, setIsVerified] = useState<boolean>(false);
+  const [verificationError, setVerificationError] = useState<string | null>(null);
+  const [otpMessage, setOtpMessage] = useState<string | null>(null);
+
   // Initialize preview stream
   useEffect(() => {
     const getPreviewStream = async () => {
@@ -233,7 +242,7 @@ export default function Lobby({ roomId, user, onJoin }: LobbyProps) {
             Meeting code: <span style={{ fontFamily: 'monospace', color: 'white', background: 'rgba(255,255,255,0.1)', padding: '2px 6px', borderRadius: '4px' }}>{roomId}</span>
           </p>
 
-          <form onSubmit={handleJoin} className="join-form">
+          <form onSubmit={handleJoin} className="join-form" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <input
               type="text"
               placeholder="What's your name?"
@@ -242,16 +251,113 @@ export default function Lobby({ roomId, user, onJoin }: LobbyProps) {
               onChange={(e) => setUserName(e.target.value)}
               required
               maxLength={20}
+              disabled={isVerified}
               autoFocus
             />
-            
-            <button 
-              type="submit" 
-              className="btn-join-meet"
-              disabled={!userName.trim()}
-            >
-              Ask to join
-            </button>
+
+            <input
+              type="email"
+              placeholder="Enter your email ID"
+              className="name-input"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              disabled={isVerified}
+            />
+
+            {!isVerified && !otpSent && (
+              <button 
+                type="button" 
+                className="btn-join-meet"
+                onClick={() => {
+                  if (!userName.trim() || !email.trim()) {
+                    setVerificationError('Please enter both name and email first.');
+                    return;
+                  }
+                  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+                    setVerificationError('Please enter a valid email address.');
+                    return;
+                  }
+                  const code = Math.floor(100000 + Math.random() * 900000).toString();
+                  setGeneratedOtp(code);
+                  setOtpSent(true);
+                  setVerificationError(null);
+                  setOtpMessage(`[Email OTP Sent!] Please enter the simulated verification OTP: ${code}`);
+                }}
+                disabled={!userName.trim() || !email.trim()}
+              >
+                Send Verification OTP
+              </button>
+            )}
+
+            {!isVerified && otpSent && (
+              <>
+                {otpMessage && (
+                  <div style={{ padding: '8px 12px', background: 'rgba(26,115,232,0.15)', borderLeft: '3px solid var(--brand-blue)', borderRadius: '6px', fontSize: '12px', color: '#e8eaed', textAlign: 'left', lineHeight: '1.4' }}>
+                    {otpMessage}
+                  </div>
+                )}
+                <input
+                  type="text"
+                  placeholder="Enter 6-digit OTP code"
+                  className="name-input"
+                  value={otp}
+                  onChange={(e) => setOtp(e.target.value)}
+                  required
+                  maxLength={6}
+                />
+                
+                <button 
+                  type="button" 
+                  className="btn-join-meet"
+                  onClick={() => {
+                    if (otp === generatedOtp) {
+                      setIsVerified(true);
+                      setVerificationError(null);
+                      setOtpMessage(null);
+                    } else {
+                      setVerificationError('Invalid verification OTP code. Please try again.');
+                    }
+                  }}
+                  disabled={otp.length !== 6}
+                >
+                  Verify Code
+                </button>
+                
+                <button 
+                  type="button" 
+                  style={{ background: 'none', border: 'none', color: 'var(--text-secondary-dark)', fontSize: '13px', cursor: 'pointer', textDecoration: 'underline', marginTop: '4px' }}
+                  onClick={() => {
+                    setOtpSent(false);
+                    setOtp('');
+                  }}
+                >
+                  Change Email / Reset
+                </button>
+              </>
+            )}
+
+            {isVerified && (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--brand-green)', fontSize: '14px', justifyContent: 'center', margin: '4px 0' }}>
+                  <span>✓ Email verified successfully</span>
+                </div>
+                
+                <button 
+                  type="submit" 
+                  className="btn-join-meet"
+                  disabled={!userName.trim()}
+                >
+                  Ask to join
+                </button>
+              </>
+            )}
+
+            {verificationError && (
+              <div style={{ color: 'var(--brand-red)', fontSize: '13px', marginTop: '4px', textAlign: 'center' }}>
+                {verificationError}
+              </div>
+            )}
           </form>
         </div>
       </main>

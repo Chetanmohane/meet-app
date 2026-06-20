@@ -6,14 +6,25 @@ interface ParticipantsDrawerProps {
   localUserName: string;
   onClose: () => void;
   joinHistory: HistoryEntry[];
+  isCreator: boolean;
+  roomId: string;
 }
 
-export default function ParticipantsDrawer({ peers, localUserName, onClose, joinHistory }: ParticipantsDrawerProps) {
+export default function ParticipantsDrawer({ 
+  peers, 
+  localUserName, 
+  onClose, 
+  joinHistory,
+  isCreator,
+  roomId
+}: ParticipantsDrawerProps) {
   const totalCount = peers.length + 1;
 
   const getInitial = (name: string) => {
     return name ? name.charAt(0).toUpperCase() : '?';
   };
+
+  const hostId = `${roomId}-host`;
 
   return (
     <div className="drawer-container">
@@ -31,7 +42,7 @@ export default function ParticipantsDrawer({ peers, localUserName, onClose, join
               {getInitial(localUserName)}
             </div>
             <div className="p-name" style={{ fontWeight: '600' }}>
-              {localUserName} (You, Host)
+              {localUserName} (You{isCreator ? ', Host/Admin' : ''})
             </div>
           </div>
         </div>
@@ -49,6 +60,20 @@ export default function ParticipantsDrawer({ peers, localUserName, onClose, join
                 </div>
                 <div className="p-name">
                   {peer.userName}
+                  {peer.socketId === hostId && (
+                    <span style={{ 
+                      color: 'var(--brand-blue)', 
+                      fontSize: '10px', 
+                      background: 'rgba(26,115,232,0.12)', 
+                      border: '1px solid rgba(26,115,232,0.2)',
+                      padding: '2px 6px', 
+                      borderRadius: '4px', 
+                      marginLeft: '8px',
+                      fontWeight: '500'
+                    }}>
+                      Host/Admin
+                    </span>
+                  )}
                 </div>
               </div>
               
