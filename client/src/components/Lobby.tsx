@@ -35,10 +35,6 @@ export default function Lobby({ roomId, user, onJoin }: LobbyProps) {
           audio: true
         });
         setLocalStream(stream);
-        
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
       } catch (err: any) {
         console.error('Error getting media devices:', err);
         setPermissionError(err.message || 'Could not access camera or microphone.');
@@ -63,7 +59,13 @@ export default function Lobby({ roomId, user, onJoin }: LobbyProps) {
   // Update video element source if stream changes or video is toggled
   useEffect(() => {
     if (videoRef.current && localStream) {
-      videoRef.current.srcObject = videoEnabled ? localStream : null;
+      const videoEl = videoRef.current;
+      if (videoEnabled && localStream.getVideoTracks().length > 0) {
+        videoEl.srcObject = localStream;
+        videoEl.play().catch(e => console.log("Video play interrupted:", e));
+      } else {
+        videoEl.srcObject = null;
+      }
     }
   }, [localStream, videoEnabled]);
 
@@ -115,14 +117,14 @@ export default function Lobby({ roomId, user, onJoin }: LobbyProps) {
       <main className="lobby-content">
         <div className="preview-wrapper">
           <div className={`video-preview-box video-tile effect-${videoEffect}`}>
-            {videoEnabled && localStream && localStream.getVideoTracks().length > 0 ? (
-              <video 
-                ref={videoRef} 
-                autoPlay 
-                playsInline 
-                muted 
-              />
-            ) : (
+            <video 
+              ref={videoRef} 
+              autoPlay 
+              playsInline 
+              muted 
+              style={{ display: videoEnabled && localStream && localStream.getVideoTracks().length > 0 ? 'block' : 'none' }}
+            />
+            {(!videoEnabled || !localStream || localStream.getVideoTracks().length === 0) && (
               <div className="preview-placeholder">
                 <div className="big-avatar">
                   {userInitial}

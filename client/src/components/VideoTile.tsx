@@ -26,15 +26,12 @@ export default function VideoTile({
 
   useEffect(() => {
     if (videoRef.current) {
-      if (stream && videoEnabled) {
-        const hasVideoTracks = stream.getVideoTracks().length > 0;
-        if (hasVideoTracks) {
-          videoRef.current.srcObject = stream;
-        } else {
-          videoRef.current.srcObject = null;
-        }
+      const videoEl = videoRef.current;
+      if (stream && videoEnabled && stream.getVideoTracks().length > 0) {
+        videoEl.srcObject = stream;
+        videoEl.play().catch(e => console.log("Video play interrupted:", e));
       } else {
-        videoRef.current.srcObject = null;
+        videoEl.srcObject = null;
       }
     }
   }, [stream, videoEnabled]);
@@ -43,14 +40,14 @@ export default function VideoTile({
 
   return (
     <div className={`video-tile ${isLocal ? 'local' : ''} ${isSpeaking ? 'speaking' : ''} effect-${videoEffect}`}>
-      {videoEnabled && stream && stream.getVideoTracks().length > 0 ? (
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted={isLocal}
-        />
-      ) : (
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted={isLocal}
+        style={{ display: videoEnabled && stream && stream.getVideoTracks().length > 0 ? 'block' : 'none' }}
+      />
+      {(!videoEnabled || !stream || stream.getVideoTracks().length === 0) && (
         <div className="avatar-container">
           <div className="avatar-circle">
             {userInitial}
