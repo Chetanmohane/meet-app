@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { io, Socket } from 'socket.io-client';
-
-const SOCKET_SERVER_URL = (import.meta as any).env.VITE_BACKEND_URL || (window.location.hostname === 'localhost' ? 'http://localhost:5050' : window.location.origin);
+import PeerJS, { MediaConnection, DataConnection } from 'peerjs';
 
 export interface Peer {
-  socketId: string;
+  socketId: string; // Map PeerJS ID to socketId to avoid UI changes
   userId: string;
   userName: string;
   stream: MediaStream | null;
@@ -34,13 +32,12 @@ export interface Caption {
   timestamp: number;
 }
 
-const iceConfiguration = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' }
-  ]
-};
+export interface HistoryEntry {
+  id: string;
+  userName: string;
+  action: 'joined' | 'left';
+  timestamp: string;
+}
 
 export default function useWebRTC(
   roomId: string, 
@@ -64,27 +61,47 @@ export default function useWebRTC(
   const [reactions, setReactions] = useState<Reaction[]>([]);
   const [captions, setCaptions] = useState<{ [sid: string]: Caption }>({});
   const [captionsEnabled, setCaptionsEnabled] = useState<boolean>(false);
+  const [joinHistory, setJoinHistory] = useState<HistoryEntry[]>([]);
 
-  const socketRef = useRef<Socket | null>(null);
-  const peerConnections = useRef<{ [socketId: string]: RTCPeerConnection }>({});
+  const peerInstanceRef = useRef<PeerJS | null>(null);
   const localStreamRef = useRef<MediaStream | null>(initialStream);
   const recognitionRef = useRef<any>(null);
+  const peersRef = useRef<Peer[]>([]);
+  const dataConnectionsRef = useRef<{ [peerId: string]: DataConnection }>({});
+  const mediaCallsRef = useRef<{ [peerId: string]: MediaConnection }>({});
 
-  // Keep local stream ref updated
+  useEffect(() => {
+    peersRef.current = peers;
+  }, [peers]);
+
   useEffect(() => {
     localStreamRef.current = localStream;
   }, [localStream]);
 
-  // Web Audio volume level tracker to detect active speakers
+  const addHistoryEntry = useCallback((userName: string, action: 'joined' | 'left') => {
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const id = Math.random().toString(36).substring(2, 9);
+    setJoinHistory(prev => [...prev, { id, userName, action, timestamp: time }]);
+  }, []);
+
+  // Broadcast data helper
+  const broadcastData = useCallback((data: any) => {
+    Object.values(dataConnectionsRef.current).forEach(conn => {
+      if (conn.open) {
+        conn.send(data);
+      }
+    });
+  }, []);
+
+  // Web Audio active speaker detection
   useEffect(() => {
     const cleanupMap: { [sid: string]: () => void } = {};
 
-    // 1. Check local volume
     if (localStream && micEnabled) {
       const audioTracks = localStream.getAudioTracks();
       if (audioTracks.length > 0) {
         const cleanup = startAudioAnalyser(localStream, (vol) => {
-          const localSid = socketRef.current?.id || 'local';
+          const localSid = peerInstanceRef.current?.id || 'local';
           if (vol > 15) {
             setActiveSpeakers(prev => prev.includes(localSid) ? prev : [...prev, localSid]);
           } else {
@@ -95,19 +112,18 @@ export default function useWebRTC(
       }
     }
 
-    // 2. Check remote peers volume
-    peers.forEach(peer => {
-      if (peer.stream && peer.micEnabled) {
-        const audioTracks = peer.stream.getAudioTracks();
+    peers.forEach(p => {
+      if (p.stream && p.micEnabled) {
+        const audioTracks = p.stream.getAudioTracks();
         if (audioTracks.length > 0) {
-          const cleanup = startAudioAnalyser(peer.stream, (vol) => {
+          const cleanup = startAudioAnalyser(p.stream, (vol) => {
             if (vol > 15) {
-              setActiveSpeakers(prev => prev.includes(peer.socketId) ? prev : [...prev, peer.socketId]);
+              setActiveSpeakers(prev => prev.includes(p.socketId) ? prev : [...prev, p.socketId]);
             } else {
-              setActiveSpeakers(prev => prev.filter(sid => sid !== peer.socketId));
+              setActiveSpeakers(prev => prev.filter(sid => sid !== p.socketId));
             }
           });
-          if (cleanup) cleanupMap[peer.socketId] = cleanup;
+          if (cleanup) cleanupMap[p.socketId] = cleanup;
         }
       }
     });
@@ -117,35 +133,28 @@ export default function useWebRTC(
     };
   }, [localStream, micEnabled, peers]);
 
-  // Audio Analyser helper
   const startAudioAnalyser = (stream: MediaStream, onVolume: (vol: number) => void) => {
     try {
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
       if (!AudioContextClass) return null;
-      
       const audioContext = new AudioContextClass();
       const source = audioContext.createMediaStreamSource(stream);
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 256;
       source.connect(analyser);
-      
       const bufferLength = analyser.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
-      
       let active = true;
       const checkVolume = () => {
         if (!active) return;
         analyser.getByteFrequencyData(dataArray);
         let sum = 0;
-        for (let i = 0; i < bufferLength; i++) {
-          sum += dataArray[i];
-        }
+        for (let i = 0; i < bufferLength; i++) sum += dataArray[i];
         const average = sum / bufferLength;
         onVolume(average);
         requestAnimationFrame(checkVolume);
       };
       checkVolume();
-      
       return () => {
         active = false;
         audioContext.close();
@@ -164,32 +173,24 @@ export default function useWebRTC(
         rec.continuous = true;
         rec.interimResults = true;
         rec.lang = 'en-US';
-
         rec.onresult = (event: any) => {
           let interimTranscript = '';
           let finalTranscript = '';
-
           for (let i = event.resultIndex; i < event.results.length; ++i) {
-            if (event.results[i].isFinal) {
-              finalTranscript += event.results[i][0].transcript;
-            } else {
-              interimTranscript += event.results[i][0].transcript;
-            }
+            if (event.results[i].isFinal) finalTranscript += event.results[i][0].transcript;
+            else interimTranscript += event.results[i][0].transcript;
           }
-
           const text = finalTranscript || interimTranscript;
-          if (text.trim() && socketRef.current) {
-            const socket = socketRef.current;
-            socket.emit('send-caption', {
-              roomId,
-              text: text.trim(),
-              senderName: initialUserName
+          if (text.trim() && peerInstanceRef.current) {
+            const selfId = peerInstanceRef.current.id;
+            broadcastData({
+              type: 'caption',
+              senderName: initialUserName,
+              text: text.trim()
             });
-
-            // Display locally
             setCaptions(prev => ({
               ...prev,
-              [socket.id || 'local']: {
+              [selfId]: {
                 senderName: 'You',
                 text: text.trim(),
                 timestamp: Date.now()
@@ -197,49 +198,32 @@ export default function useWebRTC(
             }));
           }
         };
-
-        rec.onerror = (e: any) => {
-          console.error('Speech recognition error:', e);
-        };
-
         rec.onend = () => {
           if (captionsEnabled && recognitionRef.current) {
-            try {
-              recognitionRef.current.start();
-            } catch (err) {
-              console.warn('Speech recognition restart failed:', err);
-            }
+            try { recognitionRef.current.start(); } catch (e) {}
           }
         };
-
         recognitionRef.current = rec;
-        try {
-          rec.start();
-        } catch (err) {
-          console.error('Failed to start speech recognition:', err);
-        }
+        try { rec.start(); } catch (e) {}
       }
     } else {
       if (recognitionRef.current) {
         recognitionRef.current.stop();
         recognitionRef.current = null;
       }
-      const localSid = socketRef.current?.id || 'local';
+      const selfId = peerInstanceRef.current?.id || 'local';
       setCaptions(prev => {
         const copy = { ...prev };
-        delete copy[localSid];
+        delete copy[selfId];
         return copy;
       });
     }
-
     return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
+      if (recognitionRef.current) recognitionRef.current.stop();
     };
-  }, [captionsEnabled, initialUserName, roomId]);
+  }, [captionsEnabled, initialUserName, broadcastData]);
 
-  // Clean up stale captions (older than 5 seconds)
+  // Clean stale captions
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now();
@@ -255,393 +239,388 @@ export default function useWebRTC(
         return changed ? copy : prev;
       });
     }, 1000);
-
     return () => clearInterval(interval);
   }, []);
 
-  // WebRTC Connection Setup and Socket.io signaling listeners
+  // PeerJS setup
   useEffect(() => {
-    const socket = io(SOCKET_SERVER_URL);
-    socketRef.current = socket;
+    let peer: PeerJS | null = null;
+    let localPeerId = '';
+    const hostId = `${roomId}-host`;
 
-    // Helper to create RTCPeerConnection
-    const createPC = (peerSocketId: string) => {
-      const pc = new RTCPeerConnection(iceConfiguration);
-
-      // Add local stream tracks
-      const stream = localStreamRef.current;
-      if (stream) {
-        stream.getTracks().forEach(track => {
-          pc.addTrack(track, stream);
-        });
-      }
-
-      // Handle ICE Candidates
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          socket.emit('relay-signal', {
-            targetSocketId: peerSocketId,
-            signal: { candidate: event.candidate }
-          });
+    const initPeer = (isHostRole: boolean) => {
+      localPeerId = isHostRole ? hostId : `${roomId}-guest-${userId}-${Math.random().toString(36).substring(2, 6)}`;
+      
+      peer = new PeerJS(localPeerId, {
+        host: '0.peerjs.com',
+        port: 443,
+        path: '/',
+        secure: true,
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' }
+          ]
         }
-      };
+      });
+      peerInstanceRef.current = peer;
 
-      // Handle Remote Tracks
-      pc.ontrack = (event) => {
-        const remoteStream = event.streams[0];
-        setPeers(prev => prev.map(p => {
-          if (p.socketId === peerSocketId) {
-            return { ...p, stream: remoteStream };
-          }
-          return p;
-        }));
-      };
+      peer.on('open', (id) => {
+        console.log('PeerJS client opened with ID:', id);
+        addHistoryEntry(`${initialUserName} (You)`, 'joined');
 
-      return pc;
+        if (!isHostRole) {
+          // If we are a guest, connect to the host
+          const conn = peer!.connect(hostId, {
+            metadata: { userName: initialUserName, userId, micEnabled: initialMic, videoEnabled: initialVideo }
+          });
+          handleDataConnection(conn);
+        }
+      });
+
+      // Handle incoming data connections (e.g. Host receives guest connection, or guest-to-guest)
+      peer.on('connection', (conn) => {
+        console.log('Incoming data connection from:', conn.peer);
+        handleDataConnection(conn);
+
+        // If we are host, broadcast list of active guests to the new guest
+        if (isHostRole) {
+          setTimeout(() => {
+            const guestList = Object.keys(dataConnectionsRef.current).map(pid => {
+              const p = peersRef.current.find(pr => pr.socketId === pid);
+              return {
+                peerId: pid,
+                userName: p ? p.userName : 'Guest',
+                userId: p ? p.userId : pid,
+                micEnabled: p ? p.micEnabled : true,
+                videoEnabled: p ? p.videoEnabled : true
+              };
+            });
+            conn.send({
+              type: 'guest-list',
+              guests: guestList
+            });
+          }, 800);
+        }
+      });
+
+      // Handle incoming media calls
+      peer.on('call', (call) => {
+        console.log('Incoming call from:', call.peer);
+        const stream = localStreamRef.current;
+        call.answer(stream || undefined);
+        handleMediaCall(call);
+      });
+
+      peer.on('error', (err) => {
+        console.warn('PeerJS error:', err.type, err.message);
+        if (err.type === 'unavailable-id' && isHostRole) {
+          // Host ID already exists, so we are a guest! Re-init as guest.
+          console.log('Host exists in room, connecting as guest...');
+          peer?.destroy();
+          initPeer(false);
+        }
+      });
     };
 
-    socket.on('connect', () => {
-      console.log('Connected to signaling server with ID:', socket.id);
-      
-      // Join Room
-      socket.emit('join-room', {
-        roomId,
-        userId,
-        userName: initialUserName,
-        micEnabled: initialMic,
-        videoEnabled: initialVideo
-      });
-    });
+    const handleDataConnection = (conn: DataConnection) => {
+      dataConnectionsRef.current[conn.peer] = conn;
 
-    // 1. Received list of existing users
-    socket.on('all-users', async (existingUsers: { socketId: string, userId: string, userName: string, micEnabled?: boolean, videoEnabled?: boolean }[]) => {
-      const peerList: Peer[] = [];
-
-      for (const peer of existingUsers) {
-        // Create peer record
-        peerList.push({
-          socketId: peer.socketId,
-          userId: peer.userId,
-          userName: peer.userName,
-          stream: null,
-          micEnabled: peer.micEnabled !== undefined ? peer.micEnabled : true,
-          videoEnabled: peer.videoEnabled !== undefined ? peer.videoEnabled : true,
-          handRaised: false
+      conn.on('open', () => {
+        // Add peer to list
+        const meta = conn.metadata || {};
+        const userName = meta.userName || 'Guest';
+        
+        setPeers(prev => {
+          if (prev.some(p => p.socketId === conn.peer)) return prev;
+          return [...prev, {
+            socketId: conn.peer,
+            userId: meta.userId || conn.peer,
+            userName,
+            stream: null,
+            micEnabled: meta.micEnabled !== undefined ? meta.micEnabled : true,
+            videoEnabled: meta.videoEnabled !== undefined ? meta.videoEnabled : true,
+            handRaised: false
+          }];
         });
+        addHistoryEntry(userName, 'joined');
 
-        // Initialize PeerConnection (we are the initiator for existing users)
-        const pc = createPC(peer.socketId);
-        peerConnections.current[peer.socketId] = pc;
-
-        try {
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          socket.emit('relay-signal', {
-            targetSocketId: peer.socketId,
-            signal: { sdp: pc.localDescription }
-          });
-        } catch (e) {
-          console.error('Failed to create offer:', e);
-        }
-      }
-
-      setPeers(peerList);
-    });
-
-    // 2. New user joined the room
-    socket.on('user-joined', ({ socketId, userId, userName, micEnabled, videoEnabled }) => {
-      console.log('User joined:', userName, socketId);
-      
-      // Add user to state list
-      setPeers(prev => {
-        if (prev.some(p => p.socketId === socketId)) return prev;
-        return [...prev, {
-          socketId,
-          userId,
-          userName,
-          stream: null,
-          micEnabled: micEnabled !== undefined ? micEnabled : true,
-          videoEnabled: videoEnabled !== undefined ? videoEnabled : true,
-          handRaised: false
-        }];
-      });
-    });
-
-    // 3. Receive signal SDP Offer/Answer or ICE Candidate
-    socket.on('signal', async ({ senderSocketId, signal }) => {
-      let pc = peerConnections.current[senderSocketId];
-      
-      if (!pc) {
-        pc = createPC(senderSocketId);
-        peerConnections.current[senderSocketId] = pc;
-      }
-
-      try {
-        if (signal.sdp) {
-          await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-          
-          if (signal.sdp.type === 'offer') {
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            socket.emit('relay-signal', {
-              targetSocketId: senderSocketId,
-              signal: { sdp: pc.localDescription }
+        // Call the peer to send our media stream ONLY if we initiated the connection (prevents glare)
+        if ((conn as any).isInitiator) {
+          const stream = localStreamRef.current;
+          if (stream) {
+            console.log('Initiating call to:', conn.peer);
+            const call = peer!.call(conn.peer, stream, {
+              metadata: { userName: initialUserName, micEnabled: initialMic, videoEnabled: initialVideo }
             });
+            handleMediaCall(call);
           }
-        } else if (signal.candidate) {
-          await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
         }
-      } catch (err) {
-        console.error('Error handling WebRTC signal:', err);
-      }
-    });
+      });
 
-    // 4. Chat messages
-    socket.on('receive-chat-message', ({ senderId, senderName, messageText, timestamp }) => {
-      setChatMessages(prev => [...prev, {
-        senderId,
-        senderName,
-        messageText,
-        timestamp,
-        isLocal: senderId === socket.id
-      }]);
-
-      if (senderId !== socket.id) {
-        setUnreadCount(prev => prev + 1);
-      }
-    });
-
-    // 5. Media Toggles
-    socket.on('user-media-toggled', ({ socketId, type, enabled }) => {
-      setPeers(prev => prev.map(p => {
-        if (p.socketId === socketId) {
-          if (type === 'audio') return { ...p, micEnabled: enabled };
-          if (type === 'video') return { ...p, videoEnabled: enabled };
+      conn.on('data', (data: any) => {
+        if (data.type === 'guest-list') {
+          // Guest receives list of other guests from the host
+          data.guests.forEach((g: any) => {
+            if (g.peerId !== localPeerId && !dataConnectionsRef.current[g.peerId]) {
+              const c = peer!.connect(g.peerId, {
+                metadata: { userName: initialUserName, userId, micEnabled: initialMic, videoEnabled: initialVideo }
+              });
+              (c as any).isInitiator = true;
+              handleDataConnection(c);
+            }
+          });
+        } else if (data.type === 'chat') {
+          setChatMessages(prev => [...prev, {
+            senderId: conn.peer,
+            senderName: data.senderName,
+            messageText: data.text,
+            timestamp: data.timestamp,
+            isLocal: false
+          }]);
+          setUnreadCount(prev => prev + 1);
+        } else if (data.type === 'media-toggle') {
+          setPeers(prev => prev.map(p => {
+            if (p.socketId === conn.peer) {
+              if (data.mediaType === 'audio') return { ...p, micEnabled: data.enabled };
+              if (data.mediaType === 'video') return { ...p, videoEnabled: data.enabled };
+            }
+            return p;
+          }));
+        } else if (data.type === 'hand-raise') {
+          setPeers(prev => prev.map(p => {
+            if (p.socketId === conn.peer) return { ...p, handRaised: data.raised };
+            return p;
+          }));
+        } else if (data.type === 'reaction') {
+          const id = Math.random().toString(36).substring(2, 9);
+          const drift = Math.random() * 80 - 40;
+          setReactions(prev => [...prev, { id, senderName: data.senderName, emoji: data.emoji, drift }]);
+          setTimeout(() => {
+            setReactions(prev => prev.filter(r => r.id !== id));
+          }, 4000);
+        } else if (data.type === 'caption') {
+          setCaptions(prev => ({
+            ...prev,
+            [conn.peer]: {
+              senderName: data.senderName,
+              text: data.text,
+              timestamp: Date.now()
+            }
+          }));
         }
-        return p;
-      }));
-    });
+      });
 
-    // 6. Hand Raises
-    socket.on('user-hand-raised', ({ socketId, raised }) => {
-      setPeers(prev => prev.map(p => {
-        if (p.socketId === socketId) {
-          return { ...p, handRaised: raised };
-        }
-        return p;
-      }));
-    });
-
-    // 7. Reactions
-    socket.on('user-reacted', ({ senderName, emoji }) => {
-      const id = Math.random().toString(36).substring(2, 9);
-      const drift = Math.random() * 80 - 40;
-      setReactions(prev => [...prev, { id, senderName, emoji, drift }]);
-      setTimeout(() => {
-        setReactions(prev => prev.filter(r => r.id !== id));
-      }, 4000);
-    });
-
-    // 8. Captions
-    socket.on('user-captioned', ({ socketId, senderName, text }) => {
-      setCaptions(prev => ({
-        ...prev,
-        [socketId]: {
-          senderName,
-          text,
-          timestamp: Date.now()
-        }
-      }));
-    });
-
-    // 9. User Left / Disconnected
-    socket.on('user-left', ({ socketId }) => {
-      console.log('User left:', socketId);
+      conn.on('close', () => {
+        handlePeerDisconnect(conn.peer);
+      });
       
-      // Close peer connection
-      if (peerConnections.current[socketId]) {
-        peerConnections.current[socketId].close();
-        delete peerConnections.current[socketId];
+      conn.on('error', () => {
+        handlePeerDisconnect(conn.peer);
+      });
+    };
+
+    const handleMediaCall = (call: MediaConnection) => {
+      mediaCallsRef.current[call.peer] = call;
+      call.on('stream', (remoteStream) => {
+        console.log('Received remote stream for:', call.peer);
+        setPeers(prev => prev.map(p => {
+          if (p.socketId === call.peer) return { ...p, stream: remoteStream };
+          return p;
+        }));
+      });
+      call.on('close', () => {
+        handlePeerDisconnect(call.peer);
+      });
+    };
+
+    const handlePeerDisconnect = (peerId: string) => {
+      const p = peersRef.current.find(pr => pr.socketId === peerId);
+      if (p) {
+        addHistoryEntry(p.userName, 'left');
       }
 
-      // Remove from states
-      setPeers(prev => prev.filter(p => p.socketId !== socketId));
-      setActiveSpeakers(prev => prev.filter(sid => sid !== socketId));
+      setPeers(prev => prev.filter(pr => pr.socketId !== peerId));
+      setActiveSpeakers(prev => prev.filter(sid => sid !== peerId));
       setCaptions(prev => {
         const copy = { ...prev };
-        delete copy[socketId];
+        delete copy[peerId];
         return copy;
       });
-    });
+
+      if (dataConnectionsRef.current[peerId]) {
+        dataConnectionsRef.current[peerId].close();
+        delete dataConnectionsRef.current[peerId];
+      }
+      if (mediaCallsRef.current[peerId]) {
+        mediaCallsRef.current[peerId].close();
+        delete mediaCallsRef.current[peerId];
+      }
+
+      // If the disconnected peer was the host, elect a new host!
+      if (peerId === hostId) {
+        console.log('Host disconnected! Electing a new host...');
+        const delay = Math.random() * 2000 + 1000; // 1-3 seconds random delay
+        setTimeout(() => {
+          if (peerInstanceRef.current && !peerInstanceRef.current.destroyed) {
+            console.log('Attempting to become the new host...');
+            peerInstanceRef.current.destroy();
+            initPeer(true);
+          }
+        }, delay);
+      }
+    };
+
+    // Try starting as host
+    initPeer(true);
 
     return () => {
-      socket.disconnect();
-      Object.values(peerConnections.current).forEach(pc => pc.close());
-      peerConnections.current = {};
+      peer?.destroy();
+      Object.values(dataConnectionsRef.current).forEach(c => c.close());
+      Object.values(mediaCallsRef.current).forEach(c => c.close());
+      dataConnectionsRef.current = {};
+      mediaCallsRef.current = {};
       if (initialStream) {
         initialStream.getTracks().forEach(t => t.stop());
       }
     };
-  }, [roomId, userId, initialUserName, initialStream]);
+  }, [roomId, userId, initialUserName]);
 
-  // 1. Toggle local microphone track
+  // Mic Toggle
   const toggleLocalMic = useCallback(async () => {
     const enabled = !micEnabled;
-    
     if (localStreamRef.current) {
       localStreamRef.current.getAudioTracks().forEach(track => {
         track.enabled = enabled;
       });
     }
-
-    if (socketRef.current) {
-      socketRef.current.emit('toggle-media', {
-        roomId,
-        type: 'audio',
-        enabled
-      });
-    }
+    broadcastData({
+      type: 'media-toggle',
+      mediaType: 'audio',
+      enabled
+    });
     setMicEnabled(enabled);
-  }, [micEnabled, roomId]);
+  }, [micEnabled, broadcastData]);
 
-  // 2. Toggle local video camera track
+  // Video Toggle
   const toggleLocalVideo = useCallback(async () => {
     const enabled = !videoEnabled;
-
     if (localStreamRef.current) {
       localStreamRef.current.getVideoTracks().forEach(track => {
         track.enabled = enabled;
       });
     }
-
-    if (socketRef.current) {
-      socketRef.current.emit('toggle-media', {
-        roomId,
-        type: 'video',
-        enabled
-      });
-    }
+    broadcastData({
+      type: 'media-toggle',
+      mediaType: 'video',
+      enabled
+    });
     setVideoEnabled(enabled);
-  }, [videoEnabled, roomId]);
+  }, [videoEnabled, broadcastData]);
 
-  // 3. Toggle Hand Raise
+  // Hand Raise Toggle
   const toggleHandRaise = useCallback(async () => {
-    const nextState = !handRaised;
-    if (socketRef.current) {
-      socketRef.current.emit('raise-hand', {
-        roomId,
-        raised: nextState
-      });
-    }
-    setHandRaised(nextState);
-  }, [handRaised, roomId]);
+    const raised = !handRaised;
+    broadcastData({
+      type: 'hand-raise',
+      raised
+    });
+    setHandRaised(raised);
+  }, [handRaised, broadcastData]);
 
-  // 4. Toggle Screen Share
+  // Screen Share Toggle
   const toggleScreenShare = useCallback(async () => {
     const nextState = !screenSharing;
     try {
       if (nextState) {
-        // Request Screen Capture
         const displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
         const screenTrack = displayStream.getVideoTracks()[0];
         
-        // Swap screen track on all peer connections
-        Object.values(peerConnections.current).forEach(pc => {
-          const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
-          if (sender) {
-            sender.replaceTrack(screenTrack);
-          }
+        Object.values(mediaCallsRef.current).forEach(call => {
+          const sender = call.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+          if (sender) sender.replaceTrack(screenTrack);
         });
 
-        // Set screen track on local stream preview
         setLocalStream(displayStream);
-
-        // When screen share track ends (e.g. via browser "Stop Sharing" button)
-        screenTrack.onended = () => {
-          // Revert back to webcam
-          revertScreenShare();
-        };
+        screenTrack.onended = () => { revertScreenShare(); };
       } else {
         revertScreenShare();
       }
       setScreenSharing(nextState);
-    } catch (err) {
-      console.error('Failed to toggle screen share:', err);
+    } catch (e) {
+      console.error(e);
     }
   }, [screenSharing]);
 
-  // Helper to revert screen share track back to webcam
   const revertScreenShare = async () => {
     try {
-      // Release screen track
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach(t => t.stop());
       }
-
-      // Re-capture webcam track
       const cameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       const videoTrack = cameraStream.getVideoTracks()[0];
-      
-      // Ensure webcam matches user mute preferences
       videoTrack.enabled = videoEnabled;
       const audioTrack = cameraStream.getAudioTracks()[0];
       audioTrack.enabled = micEnabled;
 
-      // Replace track on all Peer Connections
-      Object.values(peerConnections.current).forEach(pc => {
-        const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
-        if (sender) {
-          sender.replaceTrack(videoTrack);
-        }
+      Object.values(mediaCallsRef.current).forEach(call => {
+        const sender = call.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+        if (sender) sender.replaceTrack(videoTrack);
       });
 
       setLocalStream(cameraStream);
     } catch (e) {
-      console.error('Failed to revert screen share back to webcam:', e);
+      console.error(e);
     }
   };
 
-  // 5. Send chat message
+  // Send Chat message
   const sendChatMessage = useCallback((messageText: string) => {
-    if (!messageText.trim() || !socketRef.current) return;
-    socketRef.current.emit('send-chat-message', {
-      roomId,
+    if (!messageText.trim()) return;
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const localId = peerInstanceRef.current?.id || 'local';
+    
+    broadcastData({
+      type: 'chat',
+      senderName: initialUserName,
+      text: messageText.trim(),
+      timestamp
+    });
+
+    setChatMessages(prev => [...prev, {
+      senderId: localId,
+      senderName: 'You',
       messageText: messageText.trim(),
-      senderName: initialUserName
-    });
-  }, [initialUserName, roomId]);
+      timestamp,
+      isLocal: true
+    }]);
+  }, [initialUserName, broadcastData]);
 
-  // 6. Send emoji reaction
+  // Send Emoji Reaction
   const sendReaction = useCallback((emoji: string) => {
-    if (!socketRef.current) return;
-    socketRef.current.emit('send-reaction', {
-      roomId,
-      emoji,
-      senderName: initialUserName
+    broadcastData({
+      type: 'reaction',
+      senderName: initialUserName,
+      emoji
     });
-
-    // Display locally
     const id = Math.random().toString(36).substring(2, 9);
     const drift = Math.random() * 80 - 40;
     setReactions(prev => [...prev, { id, senderName: 'You', emoji, drift }]);
     setTimeout(() => {
       setReactions(prev => prev.filter(r => r.id !== id));
     }, 4000);
-  }, [initialUserName, roomId]);
+  }, [initialUserName, broadcastData]);
 
-  // 7. Toggle captions on/off
   const toggleCaptions = useCallback(() => {
     setCaptionsEnabled(prev => !prev);
   }, []);
 
-  // 8. Leave meeting manually
   const leaveMeeting = useCallback(() => {
-    if (socketRef.current) {
-      socketRef.current.disconnect();
-    }
+    peerInstanceRef.current?.destroy();
   }, []);
 
-  const localSid = socketRef.current?.id || 'local';
+  const localSid = peerInstanceRef.current?.id || 'local';
 
   return {
     peers,
@@ -659,14 +638,13 @@ export default function useWebRTC(
     toggleHandRaise,
     sendChatMessage,
     leaveMeeting,
-    
-    // Premium outputs
     localSid,
     activeSpeakers,
     reactions,
     sendReaction,
     captions,
     captionsEnabled,
-    toggleCaptions
+    toggleCaptions,
+    joinHistory
   };
 }
