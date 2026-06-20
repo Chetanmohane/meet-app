@@ -2323,4 +2323,236 @@ body {
   border-color: var(--brand-blue-hover);
 }
 
+/* ==========================================================================
+   ADMITTANCE WORKFLOW (ASK TO JOIN) STYLES
+   ========================================================================== */
+
+/* Fullscreen overlays for Guest states */
+.admittance-overlay-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: #202124; /* Google Meet dark bg */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  font-family: var(--font-main);
+  color: white;
+  padding: 24px;
+  text-align: center;
+}
+
+.admittance-box {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(16px);
+  border-radius: var(--radius-lg);
+  padding: 40px;
+  max-width: 480px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
+  animation: fadeInScale 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.admittance-icon-container {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background: rgba(26, 115, 232, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 24px;
+  position: relative;
+}
+
+.admittance-icon-pulse {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: 50%;
+  border: 2px solid var(--brand-blue);
+  animation: pulseOuter 2s infinite ease-in-out;
+}
+
+.admittance-box h2 {
+  font-family: var(--font-header);
+  font-size: 24px;
+  font-weight: 500;
+  margin-bottom: 12px;
+  color: #e8eaed;
+}
+
+.admittance-box p {
+  font-size: 15px;
+  color: var(--text-secondary-dark);
+  line-height: 22px;
+  margin-bottom: 32px;
+}
+
+.admittance-box .btn-cancel {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: white;
+  padding: 12px 24px;
+  border-radius: var(--radius-full);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+.admittance-box .btn-cancel:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.admittance-box .btn-return {
+  background: var(--brand-blue);
+  border: none;
+  color: white;
+  padding: 12px 28px;
+  border-radius: var(--radius-full);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+.admittance-box .btn-return:hover {
+  background: var(--brand-blue-hover);
+}
+
+/* Admittance Popup Dialog for Host */
+.admittance-toast-container {
+  position: fixed;
+  bottom: 100px;
+  left: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 10000;
+  max-width: 380px;
+  width: 100%;
+}
+
+.admittance-toast {
+  background-color: var(--bg-secondary-dark);
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: slideUp 0.3s cubic-bezier(0, 0, 0.2, 1);
+}
+
+.admittance-toast-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.admittance-toast-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--brand-blue);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.admittance-toast-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.admittance-toast-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: white;
+}
+
+.admittance-toast-desc {
+  font-size: 12px;
+  color: var(--text-secondary-dark);
+}
+
+.admittance-toast-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.admittance-toast-actions button {
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+.admittance-toast-actions .btn-deny {
+  background: none;
+  border: 1px solid var(--border-light);
+  color: var(--brand-red);
+}
+
+.admittance-toast-actions .btn-deny:hover {
+  background: rgba(234, 67, 53, 0.08);
+}
+
+.admittance-toast-actions .btn-admit {
+  background: var(--brand-blue);
+  border: none;
+  color: white;
+}
+
+.admittance-toast-actions .btn-admit:hover {
+  background: var(--brand-blue-hover);
+}
+
+/* Animations */
+@keyframes fadeInScale {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes pulseOuter {
+  0% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 0.1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+}
+
 

@@ -57,6 +57,31 @@ export default function useWebRTC(
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [unreadCount, setUnreadCount] = useState<number>(0);
 
+  // Google Meet admittance states
+  const [admissionStatus, setAdmissionStatus] = useState<'asking' | 'admitted' | 'denied'>(
+    isCreator ? 'admitted' : 'asking'
+  );
+  
+  interface JoinRequest {
+    userId: string;
+    userName: string;
+    peerId: string;
+  }
+  const [pendingJoinRequests, setPendingJoinRequests] = useState<JoinRequest[]>([]);
+  const [admittedPeers, setAdmittedPeers] = useState<string[]>([]);
+  
+  const admittedPeersRef = useRef<string[]>([]);
+  const pendingRequestsMetaRef = useRef<{ [peerId: string]: any }>({});
+  const admissionStatusRef = useRef<'asking' | 'admitted' | 'denied'>(isCreator ? 'admitted' : 'asking');
+
+  useEffect(() => {
+    admittedPeersRef.current = admittedPeers;
+  }, [admittedPeers]);
+
+  useEffect(() => {
+    admissionStatusRef.current = admissionStatus;
+  }, [admissionStatus]);
+
   // Premium states
   const [activeSpeakers, setActiveSpeakers] = useState<string[]>([]);
   const [reactions, setReactions] = useState<Reaction[]>([]);
@@ -73,6 +98,9 @@ export default function useWebRTC(
 
   const micEnabledRef = useRef<boolean>(initialMic);
   const videoEnabledRef = useRef<boolean>(initialVideo);
+
+  const admitGuestRef = useRef<(peerId: string) => void>(() => {});
+  const denyGuestRef = useRef<(peerId: string) => void>(() => {});
 
   useEffect(() => {
     peersRef.current = peers;
@@ -291,7 +319,7 @@ export default function useWebRTC(
                 metadata: { userName: initialUserName, userId, micEnabled: micEnabledRef.current, videoEnabled: videoEnabledRef.current }
               });
               (conn as any).isInitiator = true;
-              handleDataConnection(conn);
+              handleDataConnection(conn, isHostRole);
 
               conn.on('error', (err) => {
                 console.log('Host connection error (host offline), retrying in 4s...', err);
@@ -307,25 +335,29 @@ export default function useWebRTC(
       // Handle incoming data connections (e.g. Host receives guest connection, or guest-to-guest)
       peer.on('connection', (conn) => {
         console.log('Incoming data connection from:', conn.peer);
-        handleDataConnection(conn);
+        handleDataConnection(conn, isHostRole);
 
-        // If we are host, broadcast list of active guests to the new guest
+        // If we are host, broadcast list of active guests to the new guest ONLY if they are already admitted
         if (isHostRole) {
           setTimeout(() => {
-            const guestList = Object.keys(dataConnectionsRef.current).map(pid => {
-              const p = peersRef.current.find(pr => pr.socketId === pid);
-              return {
-                peerId: pid,
-                userName: p ? p.userName : 'Guest',
-                userId: p ? p.userId : pid,
-                micEnabled: p ? p.micEnabled : true,
-                videoEnabled: p ? p.videoEnabled : true
-              };
-            });
-            conn.send({
-              type: 'guest-list',
-              guests: guestList
-            });
+            if (admittedPeersRef.current.includes(conn.peer)) {
+              const guestList = Object.keys(dataConnectionsRef.current)
+                .filter(pid => pid !== conn.peer && admittedPeersRef.current.includes(pid))
+                .map(pid => {
+                  const p = peersRef.current.find(pr => pr.socketId === pid);
+                  return {
+                    peerId: pid,
+                    userName: p ? p.userName : 'Guest',
+                    userId: p ? p.userId : pid,
+                    micEnabled: p ? p.micEnabled : true,
+                    videoEnabled: p ? p.videoEnabled : true
+                  };
+                });
+              conn.send({
+                type: 'guest-list',
+                guests: guestList
+              });
+            }
           }, 800);
         }
       });
@@ -357,7 +389,7 @@ export default function useWebRTC(
                   metadata: { userName: initialUserName, userId, micEnabled: micEnabledRef.current, videoEnabled: videoEnabledRef.current }
                 });
                 (conn as any).isInitiator = true;
-                handleDataConnection(conn);
+                handleDataConnection(conn, isHostRole);
               }
             }, 4000);
           }
@@ -365,10 +397,43 @@ export default function useWebRTC(
       });
     };
 
-    const handleDataConnection = (conn: DataConnection) => {
+    const handleDataConnection = (conn: DataConnection, isHostRole: boolean) => {
       dataConnectionsRef.current[conn.peer] = conn;
 
       conn.on('open', () => {
+        // 1. Host side: Check if incoming guest is admitted
+        if (isHostRole && !admittedPeersRef.current.includes(conn.peer)) {
+          const meta = conn.metadata || {};
+          const reqName = meta.userName || 'Guest';
+          const reqUserId = meta.userId || conn.peer;
+          
+          console.log(`Host received connection from unadmitted guest ${reqName} (${conn.peer})`);
+          
+          setPendingJoinRequests(prev => {
+            if (prev.some(r => r.peerId === conn.peer)) return prev;
+            return [...prev, {
+              peerId: conn.peer,
+              userId: reqUserId,
+              userName: reqName
+            }];
+          });
+          
+          pendingRequestsMetaRef.current[conn.peer] = {
+            conn,
+            userName: reqName,
+            userId: reqUserId,
+            micEnabled: meta.micEnabled !== undefined ? meta.micEnabled : true,
+            videoEnabled: meta.videoEnabled !== undefined ? meta.videoEnabled : true
+          };
+          return;
+        }
+
+        // 2. Guest side: Check if we are connecting to Host and not admitted yet
+        if (!isHostRole && conn.peer === hostId && admissionStatusRef.current !== 'admitted') {
+          console.log('Guest connected to host. Waiting for admittance approval...');
+          return;
+        }
+
         // Send handshake so peer gets our real user details
         conn.send({
           type: 'handshake',
@@ -410,7 +475,52 @@ export default function useWebRTC(
       });
 
       conn.on('data', (data: any) => {
-        if (data.type === 'handshake') {
+        if (data.type === 'admit-response') {
+          if (data.allowed) {
+            console.log('Admittance granted by host!');
+            setAdmissionStatus('admitted');
+            
+            const hostMeta = conn.metadata || {};
+            const hostName = hostMeta.userName || 'Host';
+            
+            setPeers(prev => {
+              if (prev.some(p => p.socketId === conn.peer)) return prev;
+              return [...prev, {
+                socketId: conn.peer,
+                userId: hostMeta.userId || conn.peer,
+                userName: hostName,
+                stream: null,
+                micEnabled: hostMeta.micEnabled !== undefined ? hostMeta.micEnabled : true,
+                videoEnabled: hostMeta.videoEnabled !== undefined ? hostMeta.videoEnabled : true,
+                handRaised: false
+              }];
+            });
+            addHistoryEntry(hostName, 'joined');
+
+            // Send handshake so peer gets our real user details
+            conn.send({
+              type: 'handshake',
+              userId,
+              userName: initialUserName,
+              micEnabled: micEnabledRef.current,
+              videoEnabled: videoEnabledRef.current
+            });
+
+            // Call the Host to send our media stream
+            const stream = localStreamRef.current;
+            if (stream && peerInstanceRef.current) {
+              console.log('Initiating call to Host:', conn.peer);
+              const call = peerInstanceRef.current.call(conn.peer, stream, {
+                metadata: { userName: initialUserName, userId, micEnabled: micEnabledRef.current, videoEnabled: videoEnabledRef.current }
+              });
+              handleMediaCall(call);
+            }
+          } else {
+            console.log('Admittance denied by host.');
+            setAdmissionStatus('denied');
+            conn.close();
+          }
+        } else if (data.type === 'handshake') {
           console.log('Received handshake from:', conn.peer, data.userName);
           setPeers(prev => {
             const exists = prev.some(p => p.socketId === conn.peer);
@@ -447,7 +557,7 @@ export default function useWebRTC(
                 metadata: { userName: initialUserName, userId, micEnabled: micEnabledRef.current, videoEnabled: videoEnabledRef.current }
               });
               (c as any).isInitiator = true;
-              handleDataConnection(c);
+              handleDataConnection(c, false);
             }
           });
         } else if (data.type === 'chat') {
@@ -548,6 +658,10 @@ export default function useWebRTC(
         return copy;
       });
 
+      // Clear from pending join requests
+      setPendingJoinRequests(prev => prev.filter(r => r.peerId !== peerId));
+      delete pendingRequestsMetaRef.current[peerId];
+
       if (dataConnectionsRef.current[peerId]) {
         dataConnectionsRef.current[peerId].close();
         delete dataConnectionsRef.current[peerId];
@@ -556,6 +670,9 @@ export default function useWebRTC(
         mediaCallsRef.current[peerId].close();
         delete mediaCallsRef.current[peerId];
       }
+
+      // Also clean up from admittedPeers list
+      setAdmittedPeers(prev => prev.filter(pid => pid !== peerId));
 
       // If the disconnected peer was the host, wait for host to reconnect
       if (peerId === hostId) {
@@ -567,7 +684,7 @@ export default function useWebRTC(
               metadata: { userName: initialUserName, userId, micEnabled: micEnabledRef.current, videoEnabled: videoEnabledRef.current }
             });
             (conn as any).isInitiator = true;
-            handleDataConnection(conn);
+            handleDataConnection(conn, false);
 
             conn.on('error', (e) => {
               console.log('Host offline, retrying in 5s...', e);
@@ -577,6 +694,104 @@ export default function useWebRTC(
           }
         };
         setTimeout(retryConnect, 5000);
+      }
+    };
+
+    admitGuestRef.current = (guestPeerId: string) => {
+      const meta = pendingRequestsMetaRef.current[guestPeerId];
+      if (!meta) return;
+
+      const { conn, userName, userId: reqUserId, micEnabled: gMic, videoEnabled: gVideo } = meta;
+
+      // 1. Add to admittedPeers
+      setAdmittedPeers(prev => {
+        const next = [...prev, guestPeerId];
+        admittedPeersRef.current = next;
+        return next;
+      });
+
+      // 2. Remove from pending requests
+      setPendingJoinRequests(prev => prev.filter(r => r.peerId !== guestPeerId));
+      delete pendingRequestsMetaRef.current[guestPeerId];
+
+      // 3. Send admit-response to the guest
+      if (conn && conn.open) {
+        conn.send({
+          type: 'admit-response',
+          allowed: true
+        });
+
+        // 4. Send the guest-list to the guest (after a short delay to let guest update state)
+        setTimeout(() => {
+          if (conn.open) {
+            const guestList = Object.keys(dataConnectionsRef.current)
+              .filter(pid => pid !== guestPeerId && admittedPeersRef.current.includes(pid))
+              .map(pid => {
+                const p = peersRef.current.find(pr => pr.socketId === pid);
+                return {
+                  peerId: pid,
+                  userName: p ? p.userName : 'Guest',
+                  userId: p ? p.userId : pid,
+                  micEnabled: p ? p.micEnabled : true,
+                  videoEnabled: p ? p.videoEnabled : true
+                };
+              });
+            conn.send({
+              type: 'guest-list',
+              guests: guestList
+            });
+          }
+        }, 500);
+      }
+
+      // 5. Add guest to host's peers list
+      setPeers(prev => {
+        if (prev.some(p => p.socketId === guestPeerId)) return prev;
+        return [...prev, {
+          socketId: guestPeerId,
+          userId: reqUserId,
+          userName,
+          stream: null,
+          micEnabled: gMic,
+          videoEnabled: gVideo,
+          handRaised: false
+        }];
+      });
+      addHistoryEntry(userName, 'joined');
+
+      // 6. Call the guest from host to send host's media stream
+      const stream = localStreamRef.current;
+      if (stream && peer) {
+        console.log('Host calling admitted guest:', guestPeerId);
+        const call = peer.call(guestPeerId, stream, {
+          metadata: { 
+            userName: initialUserName, 
+            userId, 
+            micEnabled: micEnabledRef.current, 
+            videoEnabled: videoEnabledRef.current 
+          }
+        });
+        handleMediaCall(call);
+      }
+    };
+
+    denyGuestRef.current = (guestPeerId: string) => {
+      const meta = pendingRequestsMetaRef.current[guestPeerId];
+      
+      setPendingJoinRequests(prev => prev.filter(r => r.peerId !== guestPeerId));
+      delete pendingRequestsMetaRef.current[guestPeerId];
+
+      if (meta && meta.conn) {
+        if (meta.conn.open) {
+          meta.conn.send({
+            type: 'admit-response',
+            allowed: false
+          });
+        }
+        meta.conn.close();
+        if (dataConnectionsRef.current[guestPeerId]) {
+          delete dataConnectionsRef.current[guestPeerId];
+        }
       }
     };
 
@@ -728,6 +943,14 @@ export default function useWebRTC(
     peerInstanceRef.current?.destroy();
   }, []);
 
+  const admitGuest = useCallback((peerId: string) => {
+    admitGuestRef.current(peerId);
+  }, []);
+
+  const denyGuest = useCallback((peerId: string) => {
+    denyGuestRef.current(peerId);
+  }, []);
+
   const localSid = peerInstanceRef.current?.id || 'local';
 
   return {
@@ -753,6 +976,10 @@ export default function useWebRTC(
     captions,
     captionsEnabled,
     toggleCaptions,
-    joinHistory
+    joinHistory,
+    admissionStatus,
+    pendingJoinRequests,
+    admitGuest,
+    denyGuest
   };
 }

@@ -57,7 +57,13 @@ export default function MeetingRoom({
     captions,
     captionsEnabled,
     toggleCaptions,
-    joinHistory
+    joinHistory,
+
+    // Admittance
+    admissionStatus,
+    pendingJoinRequests,
+    admitGuest,
+    denyGuest
   } = useWebRTC(roomId, userId, userName, initialStream, initialMic, initialVideo, isCreator);
 
   const [activeDrawer, setActiveDrawer] = useState<'chat' | 'participants' | null>(null);
@@ -84,8 +90,70 @@ export default function MeetingRoom({
     onLeave();
   };
 
+  if (admissionStatus === 'asking') {
+    return (
+      <div className="admittance-overlay-container">
+        <div className="admittance-box">
+          <div className="admittance-icon-container">
+            <div className="admittance-icon-pulse"></div>
+            <span style={{ fontSize: '32px' }}>🔒</span>
+          </div>
+          <h2>Asking to join...</h2>
+          <p>You'll join the call when someone lets you in.</p>
+          <button className="btn-cancel" onClick={handleLeave}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (admissionStatus === 'denied') {
+    return (
+      <div className="admittance-overlay-container">
+        <div className="admittance-box">
+          <div className="admittance-icon-container" style={{ background: 'rgba(234, 67, 53, 0.1)' }}>
+            <span style={{ fontSize: '32px' }}>🚫</span>
+          </div>
+          <h2>You can't join this call</h2>
+          <p>Someone in the meeting denied your request to join.</p>
+          <button className="btn-return" onClick={handleLeave}>
+            Return to home screen
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="meeting-container">
+      {/* Admittance notification toasts for Host */}
+      {isCreator && pendingJoinRequests.length > 0 && (
+        <div className="admittance-toast-container">
+          {pendingJoinRequests.map((req) => (
+            <div key={req.peerId} className="admittance-toast">
+              <div className="admittance-toast-header">
+                <div className="admittance-toast-avatar">
+                  {req.userName ? req.userName.charAt(0).toUpperCase() : '?'}
+                </div>
+                <div className="admittance-toast-text">
+                  <span className="admittance-toast-title">Someone wants to join this call</span>
+                  <span className="admittance-toast-desc">{req.userName}</span>
+                </div>
+              </div>
+              <div className="admittance-toast-actions">
+                <button className="btn-deny" onClick={() => denyGuest(req.peerId)}>
+                  Deny entry
+                </button>
+                <button className="btn-admit" onClick={() => admitGuest(req.peerId)}>
+                  Admit
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Floating Emoji Reactions Overlay */}
       <div className="reactions-overlay-container">
         {reactions.map((r) => (
