@@ -6,7 +6,7 @@ import {
   MessageSquare, Users, 
   PhoneOff, Info, Copy, Check,
   Smile, Subtitles, LayoutGrid, Grid, Maximize, Columns,
-  Sparkles, X
+  Sparkles, X, MoreVertical
 } from 'lucide-react';
 import { LayoutMode } from './MeetingRoom';
 
@@ -69,6 +69,7 @@ export default function Controls({
   const [showReactionTray, setShowReactionTray] = useState<boolean>(false);
   const [showLayoutMenu, setShowLayoutMenu] = useState<boolean>(false);
   const [showEffects, setShowEffects] = useState<boolean>(false);
+  const [showMoreMenu, setShowMoreMenu] = useState<boolean>(false);
 
   const handleCopyLink = () => {
     const meetLink = `${window.location.origin}/join/${roomId}`;
@@ -107,17 +108,17 @@ export default function Controls({
           {videoEnabled ? <Video size={20} /> : <VideoOff size={20} />}
         </button>
 
-        {/* Live Captions (Speech-to-Text) Toggle */}
+        {/* Live Captions Toggle (Desktop Only) */}
         <button 
           onClick={onToggleCaptions}
-          className={`control-btn ${captionsEnabled ? 'active' : ''}`}
+          className={`control-btn desktop-only-btn ${captionsEnabled ? 'active' : ''}`}
           title={captionsEnabled ? 'Turn off captions' : 'Turn on captions'}
         >
           <Subtitles size={20} />
         </button>
 
-        {/* Floating Reactions Tray */}
-        <div className="reaction-btn-wrapper">
+        {/* Floating Reactions Tray (Desktop Only) */}
+        <div className="reaction-btn-wrapper desktop-only-btn">
           <button 
             onClick={() => setShowReactionTray(!showReactionTray)}
             className={`control-btn ${showReactionTray ? 'active' : ''}`}
@@ -143,8 +144,8 @@ export default function Controls({
           )}
         </div>
 
-        {/* Background Effects Selector */}
-        <div className="effects-btn-wrapper">
+        {/* Background Effects Selector (Desktop Only) */}
+        <div className="effects-btn-wrapper desktop-only-btn">
           <button 
             onClick={() => setShowEffects(!showEffects)}
             className={`control-btn ${videoEffect !== 'none' ? 'active' : ''}`}
@@ -203,20 +204,31 @@ export default function Controls({
           )}
         </div>
 
+        {/* Screen Share (Desktop Only) */}
         <button 
           onClick={onToggleScreenShare}
-          className={`control-btn ${screenSharing ? 'active' : ''}`}
+          className={`control-btn desktop-only-btn ${screenSharing ? 'active' : ''}`}
           title={screenSharing ? 'Stop presenting' : 'Present now'}
         >
           <Monitor size={20} />
         </button>
 
+        {/* Hand Raise (Desktop Only) */}
         <button 
           onClick={onToggleHand}
-          className={`control-btn ${handRaised ? 'active' : ''}`}
+          className={`control-btn desktop-only-btn ${handRaised ? 'active' : ''}`}
           title={handRaised ? 'Lower hand' : 'Raise hand'}
         >
           <Hand size={20} fill={handRaised ? 'white' : 'none'} />
+        </button>
+
+        {/* Mobile More Options Button */}
+        <button 
+          onClick={() => setShowMoreMenu(!showMoreMenu)}
+          className={`control-btn mobile-more-btn ${showMoreMenu ? 'active' : ''}`}
+          title="More options"
+        >
+          <MoreVertical size={20} />
         </button>
 
         <button 
@@ -229,8 +241,8 @@ export default function Controls({
       </div>
 
       <div className="controls-right">
-        {/* Layout Switcher selector */}
-        <div className="layout-btn-wrapper">
+        {/* Layout Switcher selector (Desktop Only) */}
+        <div className="layout-btn-wrapper desktop-only-btn">
           <button 
             onClick={() => setShowLayoutMenu(!showLayoutMenu)}
             className={`control-btn panel-toggle-btn ${showLayoutMenu ? 'active' : ''}`}
@@ -273,9 +285,10 @@ export default function Controls({
           )}
         </div>
 
+        {/* Info button (Desktop Only) */}
         <button 
           onClick={onToggleInfo}
-          className={`control-btn panel-toggle-btn ${showInfo ? 'active' : ''}`}
+          className={`control-btn panel-toggle-btn desktop-only-btn ${showInfo ? 'active' : ''}`}
           title="Meeting details"
           style={{ width: '40px', height: '40px' }}
         >
@@ -301,6 +314,102 @@ export default function Controls({
           {unreadChatCount > 0 && <div className="notification-badge" />}
         </button>
       </div>
+
+      {/* Mobile More Options Bottom Sheet */}
+      {showMoreMenu && (
+        <div className="mobile-more-sheet-backdrop" onClick={() => setShowMoreMenu(false)}>
+          <div className="mobile-more-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-header">
+              <h3>More options</h3>
+              <button className="btn-icon-sm" onClick={() => setShowMoreMenu(false)}>
+                <X size={18} />
+              </button>
+            </div>
+            
+            {/* Quick Reactions Bar */}
+            <div className="sheet-reactions-row">
+              {['👍', '💖', '👏', '😂', '😮', '🎉'].map(emoji => (
+                <button 
+                  key={emoji} 
+                  className="sheet-reaction-emoji-btn"
+                  onClick={() => {
+                    onSendReaction(emoji);
+                    setShowMoreMenu(false);
+                  }}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+
+            <div className="sheet-options-list">
+              {/* Hand Raise */}
+              <button 
+                className={`sheet-option-item ${handRaised ? 'active' : ''}`}
+                onClick={() => { onToggleHand(); setShowMoreMenu(false); }}
+              >
+                <Hand size={18} fill={handRaised ? 'white' : 'none'} />
+                <span>{handRaised ? 'Lower Hand' : 'Raise Hand'}</span>
+              </button>
+
+              {/* Screen Share */}
+              <button 
+                className={`sheet-option-item ${screenSharing ? 'active' : ''}`}
+                onClick={() => { onToggleScreenShare(); setShowMoreMenu(false); }}
+              >
+                <Monitor size={18} />
+                <span>{screenSharing ? 'Stop presenting' : 'Present Screen'}</span>
+              </button>
+
+              {/* Captions */}
+              <button 
+                className={`sheet-option-item ${captionsEnabled ? 'active' : ''}`}
+                onClick={() => { onToggleCaptions(); setShowMoreMenu(false); }}
+              >
+                <Subtitles size={18} />
+                <span>{captionsEnabled ? 'Turn Off Captions' : 'Turn On Captions'}</span>
+              </button>
+
+              {/* Background Effects */}
+              <button 
+                className="sheet-option-item"
+                onClick={() => {
+                  setShowEffects(true);
+                  setShowMoreMenu(false);
+                }}
+                disabled={!videoEnabled}
+              >
+                <Sparkles size={18} />
+                <span>Background Effects</span>
+              </button>
+
+              {/* Change Layout */}
+              <button 
+                className="sheet-option-item"
+                onClick={() => {
+                  setShowLayoutMenu(true);
+                  setShowMoreMenu(false);
+                }}
+              >
+                <LayoutGrid size={18} />
+                <span>Change Layout</span>
+              </button>
+
+              {/* Meeting Details Info */}
+              <button 
+                className="sheet-option-item"
+                onClick={() => {
+                  onToggleInfo();
+                  setShowMoreMenu(false);
+                }}
+              >
+                <Info size={18} />
+                <span>Meeting Details</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

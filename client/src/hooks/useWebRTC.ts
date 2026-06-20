@@ -70,6 +70,9 @@ export default function useWebRTC(
   const dataConnectionsRef = useRef<{ [peerId: string]: DataConnection }>({});
   const mediaCallsRef = useRef<{ [peerId: string]: MediaConnection }>({});
 
+  const micEnabledRef = useRef<boolean>(initialMic);
+  const videoEnabledRef = useRef<boolean>(initialVideo);
+
   useEffect(() => {
     peersRef.current = peers;
   }, [peers]);
@@ -77,6 +80,14 @@ export default function useWebRTC(
   useEffect(() => {
     localStreamRef.current = localStream;
   }, [localStream]);
+
+  useEffect(() => {
+    micEnabledRef.current = micEnabled;
+  }, [micEnabled]);
+
+  useEffect(() => {
+    videoEnabledRef.current = videoEnabled;
+  }, [videoEnabled]);
 
   const addHistoryEntry = useCallback((userName: string, action: 'joined' | 'left') => {
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -328,7 +339,16 @@ export default function useWebRTC(
       dataConnectionsRef.current[conn.peer] = conn;
 
       conn.on('open', () => {
-        // Add peer to list
+        // Send handshake so peer gets our real user details
+        conn.send({
+          type: 'handshake',
+          userId,
+          userName: initialUserName,
+          micEnabled: micEnabledRef.current,
+          videoEnabled: videoEnabledRef.current
+        });
+
+        // Add peer to list (initial placeholder, will be updated by handshake or stream meta)
         const meta = conn.metadata || {};
         const userName = meta.userName || 'Guest';
         
@@ -352,7 +372,7 @@ export default function useWebRTC(
           if (stream) {
             console.log('Initiating call to:', conn.peer);
             const call = peer!.call(conn.peer, stream, {
-              metadata: { userName: initialUserName, micEnabled: initialMic, videoEnabled: initialVideo }
+              metadata: { userName: initialUserName, userId, micEnabled: micEnabledRef.current, videoEnabled: videoEnabledRef.current }
             });
             handleMediaCall(call);
           }
@@ -360,12 +380,41 @@ export default function useWebRTC(
       });
 
       conn.on('data', (data: any) => {
-        if (data.type === 'guest-list') {
+        if (data.type === 'handshake') {
+          console.log('Received handshake from:', conn.peer, data.userName);
+          setPeers(prev => {
+            const exists = prev.some(p => p.socketId === conn.peer);
+            if (exists) {
+              return prev.map(p => {
+                if (p.socketId === conn.peer) {
+                  return {
+                    ...p,
+                    userId: data.userId,
+                    userName: data.userName,
+                    micEnabled: data.micEnabled,
+                    videoEnabled: data.videoEnabled
+                  };
+                }
+                return p;
+              });
+            } else {
+              return [...prev, {
+                socketId: conn.peer,
+                userId: data.userId,
+                userName: data.userName,
+                stream: null,
+                micEnabled: data.micEnabled,
+                videoEnabled: data.videoEnabled,
+                handRaised: false
+              }];
+            }
+          });
+        } else if (data.type === 'guest-list') {
           // Guest receives list of other guests from the host
           data.guests.forEach((g: any) => {
             if (g.peerId !== localPeerId && !dataConnectionsRef.current[g.peerId]) {
               const c = peer!.connect(g.peerId, {
-                metadata: { userName: initialUserName, userId, micEnabled: initialMic, videoEnabled: initialVideo }
+                metadata: { userName: initialUserName, userId, micEnabled: micEnabledRef.current, videoEnabled: videoEnabledRef.current }
               });
               (c as any).isInitiator = true;
               handleDataConnection(c);
@@ -425,10 +474,30 @@ export default function useWebRTC(
       mediaCallsRef.current[call.peer] = call;
       call.on('stream', (remoteStream) => {
         console.log('Received remote stream for:', call.peer);
-        setPeers(prev => prev.map(p => {
-          if (p.socketId === call.peer) return { ...p, stream: remoteStream };
-          return p;
-        }));
+        
+        const meta = call.metadata || {};
+        const userName = meta.userName || 'Guest';
+        
+        setPeers(prev => {
+          const exists = prev.some(p => p.socketId === call.peer);
+          if (exists) {
+            return prev.map(p => {
+              if (p.socketId === call.peer) return { ...p, stream: remoteStream };
+              return p;
+            });
+          } else {
+            console.log('Adding peer from call stream metadata:', call.peer, userName);
+            return [...prev, {
+              socketId: call.peer,
+              userId: meta.userId || call.peer,
+              userName,
+              stream: remoteStream,
+              micEnabled: meta.micEnabled !== undefined ? meta.micEnabled : true,
+              videoEnabled: meta.videoEnabled !== undefined ? meta.videoEnabled : true,
+              handRaised: false
+            }];
+          }
+        });
       });
       call.on('close', () => {
         handlePeerDisconnect(call.peer);
