@@ -340,11 +340,27 @@ export default function useWebRTC(
 
       peer.on('error', (err) => {
         console.warn('PeerJS error:', err.type, err.message);
+        
         if (err.type === 'unavailable-id' && isHostRole) {
-          // Host ID already exists, so we are a guest! Re-init as guest.
-          console.log('Host exists in room, connecting as guest...');
+          console.log('Host ID taken, connecting as guest...');
           peer?.destroy();
           initPeer(false);
+        }
+        
+        if (err.type === 'peer-unavailable') {
+          console.log('Host peer is not online yet. Retrying connection in 4s...');
+          if (!isHostRole) {
+            setTimeout(() => {
+              if (peer && !peer.destroyed && !dataConnectionsRef.current[hostId]) {
+                console.log('Retrying connection to host:', hostId);
+                const conn = peer.connect(hostId, {
+                  metadata: { userName: initialUserName, userId, micEnabled: micEnabledRef.current, videoEnabled: videoEnabledRef.current }
+                });
+                (conn as any).isInitiator = true;
+                handleDataConnection(conn);
+              }
+            }, 4000);
+          }
         }
       });
     };
