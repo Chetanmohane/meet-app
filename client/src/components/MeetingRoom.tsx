@@ -54,7 +54,8 @@ export default function MeetingRoom({
     sendReaction,
     captions,
     captionsEnabled,
-    toggleCaptions
+    toggleCaptions,
+    joinHistory
   } = useWebRTC(roomId, userId, userName, initialStream, initialMic, initialVideo);
 
   const [activeDrawer, setActiveDrawer] = useState<'chat' | 'participants' | null>(null);
@@ -145,6 +146,7 @@ export default function MeetingRoom({
             peers={peers} 
             localUserName={userName}
             onClose={() => setActiveDrawer(null)} 
+            joinHistory={joinHistory}
           />
         )}
       </div>

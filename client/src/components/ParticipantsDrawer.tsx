@@ -1,13 +1,14 @@
 import { X, Mic, MicOff, Video, VideoOff, Hand } from 'lucide-react';
-import { Peer } from '../hooks/useWebRTC';
+import { Peer, HistoryEntry } from '../hooks/useWebRTC';
 
 interface ParticipantsDrawerProps {
   peers: Peer[];
   localUserName: string;
   onClose: () => void;
+  joinHistory: HistoryEntry[];
 }
 
-export default function ParticipantsDrawer({ peers, localUserName, onClose }: ParticipantsDrawerProps) {
+export default function ParticipantsDrawer({ peers, localUserName, onClose, joinHistory }: ParticipantsDrawerProps) {
   const totalCount = peers.length + 1;
 
   const getInitial = (name: string) => {
@@ -69,6 +70,26 @@ export default function ParticipantsDrawer({ peers, localUserName, onClose }: Pa
             </div>
           ))
         )}
+      </div>
+
+      {/* Join History Log Section */}
+      <div className="join-history-section" style={{ marginTop: '24px', borderTop: '1px solid var(--border-light)', paddingTop: '16px', display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+        <h4 style={{ margin: '0 0 12px 0', fontSize: '13px', fontWeight: '600', color: 'var(--text-secondary-dark)', letterSpacing: '0.5px', textTransform: 'uppercase' }}>Activity History</h4>
+        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', paddingRight: '4px' }}>
+          {joinHistory.length === 0 ? (
+            <span style={{ fontSize: '12px', color: 'var(--text-secondary-dark)' }}>No actions logged.</span>
+          ) : (
+            joinHistory.map((log) => (
+              <div key={log.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', padding: '6px 8px', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.02)' }}>
+                <span style={{ color: '#e8eaed' }}>
+                  <strong style={{ color: 'var(--brand-blue)', fontWeight: '500' }}>{log.userName}</strong>{' '}
+                  {log.action === 'joined' ? 'joined' : 'left'}
+                </span>
+                <span style={{ color: 'var(--text-secondary-dark)', fontSize: '10px' }}>{log.timestamp}</span>
+              </div>
+            ))
+          )}
+        </div>
       </div>
     </div>
   );

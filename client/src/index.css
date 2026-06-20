@@ -584,6 +584,14 @@ body {
   gap: 16px;
 }
 
+@media (max-width: 768px) {
+  .meeting-body {
+    height: calc(100vh - 72px);
+    padding: 8px;
+    gap: 8px;
+  }
+}
+
 /* ==========================================================================
    VIDEO GRID STYLING (Google Meet dynamic layouts)
    ========================================================================== */
@@ -784,10 +792,10 @@ body {
 
 @media (max-width: 768px) {
   .controls-container {
-    flex-direction: column;
-    height: auto;
-    padding: 12px;
-    gap: 12px;
+    height: 72px;
+    padding: 0 12px;
+    justify-content: space-between;
+    gap: 8px;
   }
 }
 
@@ -800,8 +808,7 @@ body {
 
 @media (max-width: 768px) {
   .controls-left {
-    width: 100%;
-    justify-content: center;
+    display: none; /* Hide meeting code on mobile controls bar for space */
   }
 }
 
@@ -892,8 +899,32 @@ body {
 
 @media (max-width: 768px) {
   .controls-right {
-    width: 100%;
+    width: auto;
+    gap: 4px;
+  }
+  .controls-center {
+    gap: 6px;
+    flex: 1;
     justify-content: center;
+  }
+  .control-btn {
+    width: 38px;
+    height: 38px;
+  }
+  .control-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+  .control-btn.danger {
+    width: 48px;
+  }
+  .panel-toggle-btn {
+    width: 34px !important;
+    height: 34px !important;
+  }
+  .panel-toggle-btn svg {
+    width: 14px;
+    height: 14px;
   }
 }
 
