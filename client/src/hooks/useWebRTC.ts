@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 
-const SOCKET_SERVER_URL = import.meta.env.VITE_BACKEND_URL || (window.location.hostname === 'localhost' ? 'http://localhost:5050' : window.location.origin);
+const SOCKET_SERVER_URL = (import.meta as any).env.VITE_BACKEND_URL || (window.location.hostname === 'localhost' ? 'http://localhost:5050' : window.location.origin);
 
 export interface Peer {
   socketId: string;
